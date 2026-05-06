@@ -266,12 +266,12 @@ function stgave_sync_regeling(array $part_array): array {
     $apidebug = FALSE;
     $extwrite = 1;
 
-    $part_id  = $part_array['id'] ?? NULL;
-    if (empty($part_id)) {
-        return ['actie' => 'skip', 'reden' => 'geen part_id'];
-    }
+    $part_id    = $part_array['id'] ?? NULL;
+    $contact_id = $part_array['contact_id'] ?? NULL;
 
-    $contact_id = $contact_id ?? $part_array['contact_id'] ?? NULL;
+    if (empty($part_id) || empty($contact_id)) {
+        return ['actie' => 'skip', 'reden' => 'geen part_id of contact_id'];
+    }
 
     $resultaat = ['participant' => 'skip', 'contribution_source' => 'skip'];
 

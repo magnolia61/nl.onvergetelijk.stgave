@@ -87,6 +87,7 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
                         'contact_id'      => $contact_id,
                         'total_amount'    => 0,  // St.Gave is altijd €0
                         'net_amount'      => 0,
+                        'financial_type_id' => 4,  // Donation/Gift
                         'contribution_status_id:name' => 'Completed',
                     ],
                 ]);
