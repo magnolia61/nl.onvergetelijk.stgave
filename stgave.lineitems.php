@@ -63,6 +63,51 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
         $contrib_id = stgave_get_contribid_fallback($part_id);
     }
 
+    // Als nog geen contribution: check of er al St.Gave lineitem(s) bestaan zonder contribution
+    // Dan koppelen we die aan een nieuwe contribution
+    if (empty($contrib_id)) {
+        $orphan_lineitems = civicrm_api4('LineItem', 'get', [
+            'checkPermissions' => FALSE,
+            'select'           => ['id', 'unit_price'],
+            'where'            => [
+                ['entity_table',    '=', 'civicrm_participant'],
+                ['entity_id',       '=', $part_id],
+                ['price_field_id',  'IN', [28, 51, 101]],  // St.Gave price fields
+            ],
+        ]);
+
+        if ($orphan_lineitems->count() > 0) {
+            wachthond($extdebug, 1, "Orphan St.Gave lineitem(s) gevonden zonder contribution", "[PID: $part_id]");
+            // Maak contribution aan voor deze orphan items
+            $contrib_total = array_sum($orphan_lineitems->column('unit_price'));
+            if ($extwrite == 1) {
+                $contrib_result = civicrm_api4('Contribution', 'create', [
+                    'checkPermissions' => FALSE,
+                    'values'           => [
+                        'contact_id'      => $contact_id,
+                        'total_amount'    => 0,  // St.Gave is altijd €0
+                        'net_amount'      => 0,
+                        'contribution_status_id:name' => 'Completed',
+                    ],
+                ]);
+                $contrib_id = $contrib_result[0]['id'] ?? NULL;
+                wachthond($extdebug, 1, "Contribution aangemaakt voor orphan items", "[BID: $contrib_id]");
+
+                // Koppel orphan lineitem(s) aan de contribution
+                if (!empty($contrib_id)) {
+                    foreach ($orphan_lineitems as $item) {
+                        civicrm_api4('LineItem', 'update', [
+                            'checkPermissions' => FALSE,
+                            'where'            => [['id', '=', $item['id']]],
+                            'values'           => ['contribution_id' => $contrib_id],
+                        ]);
+                    }
+                    wachthond($extdebug, 1, "Orphan lineitem(s) gekoppeld aan contribution", "[BID: $contrib_id]");
+                }
+            }
+        }
+    }
+
     if (empty($contrib_id)) {
         $contrib_id = stgave_maak_contribution($contact_id, $part_array, $extdebug, $apidebug, $extwrite);
         if (empty($contrib_id)) return ['actie' => 'skip', 'reden' => 'maak_contrib_faal'];
