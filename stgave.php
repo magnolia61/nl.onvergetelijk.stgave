@@ -33,9 +33,9 @@
 
 require_once 'stgave.civix.php';
 require_once 'stgave.helpers.php';
-require_once 'stgave.relaties.php';
-require_once 'stgave.telefoon.php';
-require_once 'stgave.email.php';
+require_once 'stgave.relaties.php';    // stgave_get_relaties, stgave_ensure_childof
+require_once 'stgave.telefoon.php';    // Gave Mobiel + OUD1 Mobiel
+require_once 'stgave.email.php';       // Gave Email  + OUD1 Email
 require_once 'stgave.lineitems.php';
 
 use CRM_Stgave_ExtensionUtil as E;
@@ -95,17 +95,20 @@ function stgave_civicrm_post(string $op, string $objectName, int $objectId, &$ob
 
     $processing_stgave_post = TRUE;
 
-    $part_array = base_pid2part($objectId);
-    wachthond($extdebug, 3, 'part_array (stgave post)',      ['id' => $part_array['id'] ?? NULL, 'contact_id' => $part_array['contact_id'] ?? NULL]);
+    // try/finally garandeert dat de re-entry guard altijd vrijgegeven wordt,
+    // ook als stgave_civicrm_configure() een exception gooit.
+    try {
+        $part_array = base_pid2part($objectId);
+        wachthond($extdebug, 3, 'part_array (stgave post)',  ['id' => $part_array['id'] ?? NULL, 'contact_id' => $part_array['contact_id'] ?? NULL]);
 
-    $contact_id = $part_array['contact_id'] ?? NULL;
-    if (empty($contact_id)) {
-        wachthond($extdebug, 1, "SKIP: Geen contact_id in part_array",       "[PID: $objectId]");
+        $contact_id = $part_array['contact_id'] ?? NULL;
+        if (empty($contact_id)) {
+            wachthond($extdebug, 1, "SKIP: Geen contact_id in part_array",   "[PID: $objectId]");
+            return;
+        }
+
+        stgave_civicrm_configure($contact_id, $part_array);
+    } finally {
         $processing_stgave_post = FALSE;
-        return;
     }
-
-    stgave_civicrm_configure($contact_id, $part_array);
-
-    $processing_stgave_post = FALSE;
 }

@@ -1,0 +1,360 @@
+<?php
+
+/**
+ * =======================================================================================
+ * FUNCTIE-INDEX: stgave.oud1.php
+ * =======================================================================================
+ *   stgave_sync_oud1()  Synchroniseert telefoon en e-mail van de ouder1 naar locatietype
+ *                       OUD1 (11) op de ST.GAVE deelnemer.
+ * =======================================================================================
+ */
+
+/**
+ * =======================================================================================
+ * COLOFON: stgave_sync_oud1
+ * =======================================================================================
+ * @description     Bepaalt de ouder van de deelnemer via twee stappen:
+ *
+ *                  STAP 1 — "Child of" (relatietype 1), rechtstreeks van deelnemer:
+ *                    - Nieuwste actieve relatie wordt gebruikt.
+ *                    - Betrouwbaar en uniek per deelnemer.
+ *
+ *                  STAP 2 (fallback) — via "StGave Ouder via" (relatietype 21):
+ *                    - Zoekt via de gave-contactpersoon ($gavecontact_id).
+ *                    - Alleen gebruikt als er exact 1 ouder gevonden wordt.
+ *                    - Bij 0 of >1 resultaten: skip + wachthond-melding.
+ *
+ *                  Vervolgens gesynchroniseerd:
+ *                  - Ouder's Home Mobiel  → OUD1 Mobiel (locatietype OUD1/11) op deelnemer.
+ *                  - Ouder's Home Email   → OUD1 Email  (locatietype OUD1/11) op deelnemer.
+ *                  Eventuele duplicaten op OUD1 worden opgeruimd (nieuwste behouden).
+ *
+ *                  Alleen actief voor ST.GAVE deelnemers — via stgave_civicrm_configure().
+ *
+ * @param int       $contact_id         Het contact ID van de deelnemer.
+ * @param int|null  $gavecontact_id     Het contact ID van de gave-contactpersoon (type 20).
+ * @param array     $part_array         De volledige array vanuit base_pid2part() (optioneel).
+ * @return array                        Statusarray met resultaat per onderdeel.
+ * =======================================================================================
+ */
+function stgave_sync_oud1(int $contact_id, ?int $gavecontact_id = NULL, array $part_array = []): array {
+
+    $extdebug = 'stgave.oud1';
+    $apidebug = FALSE;
+    $extwrite = 1;
+
+    $resultaat = ['ouder_id' => NULL, 'ouder_bron' => NULL, 'telefoon' => 'skip', 'email' => 'skip'];
+
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 5.0 SYNC OUD1 TELEFOON + EMAIL",              "[CID: $contact_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    // -----------------------------------------------------------------------
+    // 5.1 Bepaal ouder_id — primair via "Child of" (type 1)
+    // -----------------------------------------------------------------------
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 5.1 OPHALEN OUDER VIA CHILD OF (TYPE 1)",     "[CID: $contact_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    $ouder_id   = NULL;
+    $ouder_bron = NULL;
+
+    $params_childof_get = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'select'            => ['id', 'contact_id_b'],
+        'where'             => [
+            ['contact_id_a',          '=',  $contact_id],
+            ['relationship_type_id',  '=',  1],           // Child of (deelnemer=a, ouder=b)
+            ['is_active',             '=',  TRUE],
+        ],
+        'orderBy'           => ['id' => 'DESC'],          // Nieuwste relatie eerst
+        'limit'             => 1,
+    ];
+    wachthond($extdebug, 7, 'params_childof_get',         $params_childof_get);
+    $result_childof_get = civicrm_api4('Relationship', 'get', $params_childof_get);
+    wachthond($extdebug, 9, 'result_childof_get',         $result_childof_get);
+
+    if ($result_childof_get->count() === 1) {
+        $ouder_id   = $result_childof_get->first()['contact_id_b'];
+        $ouder_bron = 'child_of';
+        wachthond($extdebug, 1, "Ouder gevonden via Child of (type 1)",                "[OUD: $ouder_id]");
+    }
+
+    // -----------------------------------------------------------------------
+    // 5.2 Fallback — via gave-contactpersoon + "StGave Ouder via" (type 21)
+    // -----------------------------------------------------------------------
+    if (empty($ouder_id) && !empty($gavecontact_id)) {
+
+        wachthond($extdebug, 2, "########################################################################");
+        wachthond($extdebug, 1, "### STGAVE 5.2 FALLBACK OUDER VIA STGAVE OUDER VIA (TYPE 21)", "[GC: $gavecontact_id]");
+        wachthond($extdebug, 2, "########################################################################");
+
+        // Ouder is contact_a, contactpersoon is contact_b bij type 21
+        $params_type21_get = [
+            'checkPermissions'  => FALSE,
+            'debug'             => $apidebug,
+            'select'            => ['id', 'contact_id_a'],
+            'where'             => [
+                ['contact_id_b',          '=',  $gavecontact_id],
+                ['relationship_type_id',  '=',  21],          // StGave Ouder via
+                ['is_active',             '=',  TRUE],
+            ],
+        ];
+        wachthond($extdebug, 7, 'params_type21_get',      $params_type21_get);
+        $result_type21_get = civicrm_api4('Relationship', 'get', $params_type21_get);
+        wachthond($extdebug, 9, 'result_type21_get',      $result_type21_get);
+
+        $count_type21 = $result_type21_get->count();
+        wachthond($extdebug, 3, 'count type21 ouders gevonden', $count_type21);
+
+        if ($count_type21 === 1) {
+            $ouder_id   = $result_type21_get->first()['contact_id_a'];
+            $ouder_bron = 'stgave_ouder_via';
+            wachthond($extdebug, 1, "Ouder gevonden via StGave Ouder via (type 21)",   "[OUD: $ouder_id]");
+        } elseif ($count_type21 === 0) {
+            wachthond($extdebug, 1, "SKIP: Geen ouder gevonden via type 21",           "[GC: $gavecontact_id]");
+        } else {
+            // Meerdere ouders via contactpersoon — niet te bepalen welke bij deze deelnemer hoort
+            wachthond($extdebug, 1, "SKIP: $count_type21 ouders via type 21 — niet uniek bepaalbaar", "[GC: $gavecontact_id]");
+        }
+    }
+
+    if (empty($ouder_id)) {
+        wachthond($extdebug, 1, "SKIP: Geen ouder gevonden, OUD1 sync overgeslagen",  "[CID: $contact_id]");
+        return ['ouder_id' => NULL, 'ouder_bron' => NULL, 'telefoon' => 'skip', 'email' => 'skip'];
+    }
+
+    $resultaat['ouder_id']   = $ouder_id;
+    $resultaat['ouder_bron'] = $ouder_bron;
+
+    // -----------------------------------------------------------------------
+    // 5.3 Sync OUD1 Telefoon (Mobiel)
+    // -----------------------------------------------------------------------
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 5.3 SYNC OUD1 TELEFOON MOBIEL",              "[OUD: $ouder_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    // Bron: primair mobiel nummer van ouder (Home Mobiel)
+    $params_ouder_phone_bron = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'select'            => ['phone'],
+        'where'             => [
+            ['contact_id',      '=', $ouder_id],
+            ['location_type_id','=', 1],    // Home
+            ['phone_type_id',   '=', 2],    // Mobiel
+        ],
+        'limit'             => 1,
+    ];
+    wachthond($extdebug, 7, 'params_ouder_phone_bron',    $params_ouder_phone_bron);
+    $result_ouder_phone_bron = civicrm_api4('Phone', 'get', $params_ouder_phone_bron);
+    wachthond($extdebug, 9, 'result_ouder_phone_bron',    $result_ouder_phone_bron);
+
+    $new_phone_oud1 = $result_ouder_phone_bron->first()['phone'] ?? NULL;
+    wachthond($extdebug, 3, 'new_phone_oud1',             $new_phone_oud1);
+
+    if (!empty($new_phone_oud1)) {
+
+        // Haal alle bestaande OUD1 Mobiel-records op (DESC voor nieuwste eerst)
+        $params_phone_oud1 = [
+            'checkPermissions'  => FALSE,
+            'debug'             => $apidebug,
+            'select'            => ['id', 'phone'],
+            'where'             => [
+                ['contact_id',            '=', $contact_id],
+                ['location_type_id:name', '=', 'OUD1'],
+                # ['location_type_id',    '=', 11],
+                ['phone_type_id',         '=', 2],    // Mobiel
+            ],
+            'orderBy'           => ['id' => 'DESC'],
+        ];
+        wachthond($extdebug, 7, 'params_phone_oud1',      $params_phone_oud1);
+        $result_phone_oud1 = civicrm_api4('Phone', 'get', $params_phone_oud1);
+        wachthond($extdebug, 9, 'result_phone_oud1',      $result_phone_oud1);
+
+        $alle_phone_oud1  = (array) $result_phone_oud1;
+        $phone_oud1_id    = $alle_phone_oud1[0]['id']    ?? NULL;
+        $phone_oud1_phone = $alle_phone_oud1[0]['phone'] ?? NULL;
+
+        // Opruimen duplicaten: bewaar nieuwste (hoogste ID)
+        if (count($alle_phone_oud1) > 1) {
+            $dup_ids = array_column(array_slice($alle_phone_oud1, 1), 'id');
+            wachthond($extdebug, 3, 'OUD1 telefoon duplicaten te verwijderen', $dup_ids);
+            $params_phone_oud1_delete = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'where'             => [
+                    ['id',          'IN', $dup_ids],
+                    ['contact_id',  '=',  $contact_id],
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_phone_oud1_delete',    $params_phone_oud1_delete);
+            if ($extwrite == 1) {
+                civicrm_api4('Phone', 'delete', $params_phone_oud1_delete);
+            }
+            wachthond($extdebug, 1, count($dup_ids) . " dubbele OUD1-telefoons verwijderd", "[CID: $contact_id]");
+        }
+
+        if ($phone_oud1_id && $phone_oud1_phone !== $new_phone_oud1) {
+            // UPDATE
+            $params_phone_oud1_update = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'where'             => [['id', '=', $phone_oud1_id], ['contact_id', '=', $contact_id]],
+                'values'            => [
+                    'phone'                  => $new_phone_oud1,
+                    'location_type_id:name'  => 'OUD1',
+                    'phone_type_id:name'     => 'Mobile',
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_phone_oud1_update',    $params_phone_oud1_update);
+            if ($extwrite == 1) {
+                civicrm_api4('Phone', 'update', $params_phone_oud1_update);
+            }
+            wachthond($extdebug, 1, "OUD1 telefoon geüpdated",     "$phone_oud1_phone → $new_phone_oud1");
+            $resultaat['telefoon'] = 'update';
+
+        } elseif (empty($phone_oud1_id)) {
+            // CREATE
+            $params_phone_oud1_create = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'values'            => [
+                    'contact_id'             => $contact_id,
+                    'phone'                  => $new_phone_oud1,
+                    'location_type_id:name'  => 'OUD1',
+                    'phone_type_id:name'     => 'Mobile',
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_phone_oud1_create',    $params_phone_oud1_create);
+            if ($extwrite == 1) {
+                civicrm_api4('Phone', 'create', $params_phone_oud1_create);
+            }
+            wachthond($extdebug, 1, "OUD1 telefoon aangemaakt",    $new_phone_oud1);
+            $resultaat['telefoon'] = 'create';
+
+        } else {
+            wachthond($extdebug, 1, "OUD1 telefoon al in orde",    $phone_oud1_phone);
+            $resultaat['telefoon'] = 'ok';
+        }
+
+    } else {
+        wachthond($extdebug, 1, "SKIP telefoon: geen Home Mobiel bij ouder",          "[OUD: $ouder_id]");
+    }
+
+    // -----------------------------------------------------------------------
+    // 5.4 Sync OUD1 Email
+    // -----------------------------------------------------------------------
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 5.4 SYNC OUD1 EMAIL",                        "[OUD: $ouder_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    // Bron: primair e-mailadres van ouder (Home, primary eerst)
+    $params_ouder_email_bron = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'select'            => ['email'],
+        'where'             => [
+            ['contact_id',      '=', $ouder_id],
+            ['location_type_id','=', 1],    // Home
+        ],
+        'orderBy'           => ['is_primary' => 'DESC'],
+        'limit'             => 1,
+    ];
+    wachthond($extdebug, 7, 'params_ouder_email_bron',    $params_ouder_email_bron);
+    $result_ouder_email_bron = civicrm_api4('Email', 'get', $params_ouder_email_bron);
+    wachthond($extdebug, 9, 'result_ouder_email_bron',    $result_ouder_email_bron);
+
+    $new_email_oud1 = $result_ouder_email_bron->first()['email'] ?? NULL;
+    wachthond($extdebug, 3, 'new_email_oud1',             $new_email_oud1);
+
+    if (!empty($new_email_oud1)) {
+
+        // Haal alle bestaande OUD1-emails op (DESC)
+        $params_email_oud1 = [
+            'checkPermissions'  => FALSE,
+            'debug'             => $apidebug,
+            'select'            => ['id', 'email'],
+            'where'             => [
+                ['contact_id',            '=', $contact_id],
+                ['location_type_id:name', '=', 'OUD1'],
+                # ['location_type_id',    '=', 11],
+            ],
+            'orderBy'           => ['id' => 'DESC'],
+        ];
+        wachthond($extdebug, 7, 'params_email_oud1',      $params_email_oud1);
+        $result_email_oud1 = civicrm_api4('Email', 'get', $params_email_oud1);
+        wachthond($extdebug, 9, 'result_email_oud1',      $result_email_oud1);
+
+        $alle_email_oud1  = (array) $result_email_oud1;
+        $email_oud1_id    = $alle_email_oud1[0]['id']    ?? NULL;
+        $email_oud1_email = $alle_email_oud1[0]['email'] ?? NULL;
+
+        // Opruimen duplicaten: bewaar nieuwste (hoogste ID)
+        if (count($alle_email_oud1) > 1) {
+            $dup_email_ids = array_column(array_slice($alle_email_oud1, 1), 'id');
+            wachthond($extdebug, 3, 'OUD1 email duplicaten te verwijderen', $dup_email_ids);
+            $params_email_oud1_delete = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'where'             => [
+                    ['id',          'IN', $dup_email_ids],
+                    ['contact_id',  '=',  $contact_id],
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_email_oud1_delete',    $params_email_oud1_delete);
+            if ($extwrite == 1) {
+                civicrm_api4('Email', 'delete', $params_email_oud1_delete);
+            }
+            wachthond($extdebug, 1, count($dup_email_ids) . " dubbele OUD1-emails verwijderd", "[CID: $contact_id]");
+        }
+
+        if ($email_oud1_id && $email_oud1_email !== $new_email_oud1) {
+            // UPDATE
+            $params_email_oud1_update = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'where'             => [['id', '=', $email_oud1_id], ['contact_id', '=', $contact_id]],
+                'values'            => [
+                    'email'                  => $new_email_oud1,
+                    'location_type_id:name'  => 'OUD1',
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_email_oud1_update',    $params_email_oud1_update);
+            if ($extwrite == 1) {
+                civicrm_api4('Email', 'update', $params_email_oud1_update);
+            }
+            wachthond($extdebug, 1, "OUD1 email geüpdated",        "$email_oud1_email → $new_email_oud1");
+            $resultaat['email'] = 'update';
+
+        } elseif (empty($email_oud1_id)) {
+            // CREATE
+            $params_email_oud1_create = [
+                'checkPermissions'  => FALSE,
+                'debug'             => $apidebug,
+                'values'            => [
+                    'contact_id'             => $contact_id,
+                    'email'                  => $new_email_oud1,
+                    'location_type_id:name'  => 'OUD1',
+                ],
+            ];
+            wachthond($extdebug, 7, 'params_email_oud1_create',    $params_email_oud1_create);
+            if ($extwrite == 1) {
+                civicrm_api4('Email', 'create', $params_email_oud1_create);
+            }
+            wachthond($extdebug, 1, "OUD1 email aangemaakt",       $new_email_oud1);
+            $resultaat['email'] = 'create';
+
+        } else {
+            wachthond($extdebug, 1, "OUD1 email al in orde",       $email_oud1_email);
+            $resultaat['email'] = 'ok';
+        }
+
+    } else {
+        wachthond($extdebug, 1, "SKIP email: geen Home email bij ouder",              "[OUD: $ouder_id]");
+    }
+
+    wachthond($extdebug, 3, 'resultaat stgave_sync_oud1',  $resultaat);
+    return $resultaat;
+}

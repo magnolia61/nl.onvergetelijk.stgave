@@ -6,7 +6,10 @@
  * =======================================================================================
  *   stgave_civicrm_configure()       Centrale orkestratie: voert alle St.Gave logica uit.
  *   stgave_is_gave_contact()         Detecteert of een contact een ST.GAVE deelnemer is.
- *   stgave_sync_regeling()           Zet de kampgeldregeling op 'ja_stgave' in de contribution.
+ *   stgave_sync_regeling()           Zet regeling (ja_stgave), toeristenbelasting (nee/stgave)
+ *                                    en contribution source op de juiste waarden.
+ *                                    CONT_KAMPGELD.regeling wordt gezet door pecunia nadat
+ *                                    pecunia_status_stgave() onze line items herkent.
  *   stgave_sync_participant_rol()    Zorgt dat de deelnemer beide rollen heeft: 7 + 16.
  * =======================================================================================
  */
@@ -35,7 +38,6 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
 
     $extdebug = 'stgave.configure'; // Kanaal voor centrale debug-config
 
-    $stgave_start = microtime(TRUE);
     watchdog('civicrm_timing', base_microtimer("START stgave_configure [CID: $contact_id]"), NULL, WATCHDOG_DEBUG);
 
     wachthond($extdebug, 2, "########################################################################");
@@ -48,7 +50,8 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     wachthond($extdebug, 1, "### STGAVE CONFIGURE 1.0 DETECTIE ST.GAVE CONTACT",    "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    $is_gave = stgave_is_gave_contact($contact_id);
+    $is_gave = stgave_is_gave_contact($part_array);
+
     wachthond($extdebug, 3, 'is_gave',                       $is_gave);
 
     if (!$is_gave) {
@@ -58,12 +61,13 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     }
 
     wachthond($extdebug, 2, "########################################################################");
-    wachthond($extdebug, 1, "### STGAVE CONFIGURE 2.0 OPHALEN GAVECONTACT RELATIE", "[CID: $contact_id]");
+    wachthond($extdebug, 1, "### STGAVE CONFIGURE 2.0 OPHALEN RELATIES",             "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    $gavecontact = stgave_get_gavecontact($contact_id);
-    $gavecontact_id = $gavecontact['contact_id'] ?? NULL;
-    wachthond($extdebug, 3, 'gavecontact',                   $gavecontact);
+    $relaties       = stgave_get_relaties($contact_id);
+    $gavecontact_id = $relaties['gavecontact_id'] ?? NULL;
+    $ouder_id       = $relaties['ouder_id']       ?? NULL;
+    wachthond($extdebug, 3, 'relaties',                      $relaties);
 
     wachthond($extdebug, 2, "########################################################################");
     wachthond($extdebug, 1, "### STGAVE CONFIGURE 3.0 PRIVACY VOORKEUR OPHALEN",    "[CID: $contact_id]");
@@ -81,18 +85,40 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     wachthond($extdebug, 1, "### STGAVE CONFIGURE 4.0 SYNC TELEFOON",               "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    $resultaat['telefoon'] = stgave_sync_telefoon($contact_id, $gavecontact_id, $privacy_voorkeuren);
+    $resultaat['telefoon'] = stgave_sync_telefoon($contact_id, $relaties, $privacy_voorkeuren);
     wachthond($extdebug, 3, 'resultaat_telefoon',            $resultaat['telefoon']);
 
     wachthond($extdebug, 2, "########################################################################");
     wachthond($extdebug, 1, "### STGAVE CONFIGURE 5.0 SYNC EMAIL",                  "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    $resultaat['email'] = stgave_sync_email($contact_id, $gavecontact_id, $privacy_voorkeuren);
+    $resultaat['email'] = stgave_sync_email($contact_id, $relaties, $privacy_voorkeuren);
     wachthond($extdebug, 3, 'resultaat_email',               $resultaat['email']);
 
     wachthond($extdebug, 2, "########################################################################");
-    wachthond($extdebug, 1, "### STGAVE CONFIGURE 5.5 SYNC PARTICIPANT ROL",        "[CID: $contact_id]");
+    wachthond($extdebug, 1, "### STGAVE CONFIGURE 6.0 ENSURE CHILD OF RELATIE",     "[CID: $contact_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    if (!empty($ouder_id)) {
+        $resultaat['childof'] = stgave_ensure_childof($contact_id, $ouder_id);
+        wachthond($extdebug, 3, 'resultaat_childof',         $resultaat['childof']);
+    } else {
+        wachthond($extdebug, 1, "SKIP ensure_childof: geen ouder_id",               "[CID: $contact_id]");
+        $resultaat['childof'] = 'skip';
+    }
+
+    // Type 21 (StGave Ouder via) aanmaken als ouder via Child of gevonden is maar
+    // nog geen type 21 heeft naar de gave-contactpersoon
+    if (!empty($ouder_id) && !empty($gavecontact_id) && ($relaties['ouder_bron'] ?? NULL) === 'child_of') {
+        $resultaat['stgave_ouder'] = stgave_ensure_stgave_ouder($ouder_id, $gavecontact_id);
+        wachthond($extdebug, 3, 'resultaat_stgave_ouder',   $resultaat['stgave_ouder']);
+    } else {
+        wachthond($extdebug, 1, "SKIP ensure_stgave_ouder: ouder via type 21 of geen ids", "[CID: $contact_id]");
+        $resultaat['stgave_ouder'] = 'skip';
+    }
+
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE CONFIGURE 7.0 SYNC PARTICIPANT ROL",        "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
     if (!empty($part_array['id'])) {
@@ -104,7 +130,7 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     }
 
     wachthond($extdebug, 2, "########################################################################");
-    wachthond($extdebug, 1, "### STGAVE CONFIGURE 6.0 SYNC LINEITEMS",              "[CID: $contact_id]");
+    wachthond($extdebug, 1, "### STGAVE CONFIGURE 8.0 SYNC LINEITEMS",              "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
     if (!empty($part_array['id'])) {
@@ -116,7 +142,7 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     }
 
     wachthond($extdebug, 2, "########################################################################");
-    wachthond($extdebug, 1, "### STGAVE CONFIGURE 7.0 SYNC REGELING",               "[CID: $contact_id]");
+    wachthond($extdebug, 1, "### STGAVE CONFIGURE 9.0 SYNC REGELING",               "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
     if (!empty($part_array['id'])) {
@@ -132,7 +158,8 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
     wachthond($extdebug, 1, "### STGAVE CONFIGURE X.0 EINDE",                       "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    unset($processing_stgave[$contact_id]);
+    // We laten php aan het eind van de request zelf unsetten
+    // unset($processing_stgave[$contact_id]);
     return $resultaat;
 }
 
@@ -140,68 +167,97 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
  * =======================================================================================
  * COLOFON: stgave_is_gave_contact
  * =======================================================================================
- * @description     Detecteert of een contact een ST.GAVE deelnemer is via:
- *                  1. Contact subtype 'Deelnemer_Gave'
- *                  2. Tag 'ST.GAVE' (tag_id = 141)
+ * @description     Detecteert of een specifieke inschrijving via St.Gave loopt.
+ *                  
+ *                  ACTIEVE CRITERIA (Huidig event / Inschrijving):
+ *                  1. Participant rol bevat 'Deelnemer_Gave' (ID 16).
+ *                  2. Regeling staat op 'ja_stgave' (PART_KAMPGELD.regeling).
+ *                  3. De factuur bevat St.Gave line-items.
  *
- * @param int       $contact_id
+ *                  GEÏGNOREERDE CRITERIA (Contactniveau / Historie):
+ *                  4. Contact subtype 'Deelnemer_Gave'.
+ *                  5. Tag 'ST.GAVE' (ID 141).
+ *                  (Reden: 4 en 5 hangen aan het contact en kunnen uit eerdere jaren 
+ *                  stammen. Die persoon is dan 'kandidaat', maar gaat dit specifieke 
+ *                  jaar misschien regulier mee. Handmatig overrulen naar St.Gave kan 
+ *                  altijd via criterium 2).
+ *
+ * @param array     $part_array     De volledige array vanuit base_pid2part().
  * @return bool
  * =======================================================================================
  */
-function stgave_is_gave_contact(int $contact_id): bool {
+function stgave_is_gave_contact(array $part_array): bool {
 
-    $extdebug = 'stgave.configure';
-    $apidebug = FALSE;
+    $extdebug   = 'stgave.configure';
+    $apidebug   = FALSE;
+    $part_id    = $part_array['id'] ?? NULL;
 
-    // Methode 1: contact subtype
-    $params_cont = [
-        'checkPermissions'  => FALSE,
-        'debug'             => $apidebug,
-        'select'            => ['contact_sub_type'],
-        'where'             => [['id', '=', $contact_id]],
-    ];
-    wachthond($extdebug, 7, 'params_cont (stgave detect)',   $params_cont);
-    $result_cont = civicrm_api4('Contact', 'get',            $params_cont);
-    wachthond($extdebug, 9, 'result_cont (stgave detect)',   $result_cont);
-
-    $subtypes = $result_cont->first()['contact_sub_type'] ?? [];
-    if (is_array($subtypes) && in_array('Deelnemer_Gave', $subtypes)) {
-        wachthond($extdebug, 1, "ST.GAVE detectie: via subtype Deelnemer_Gave",     "[CID: $contact_id]");
-        return TRUE;
+    if (empty($part_id)) {
+        return false;
     }
 
-    // Methode 2: ST.GAVE tag (ID 141)
-    $params_tag = [
+    // --- CRITERIUM 1: PARTICIPANT ROL (16 = Deelnemer_Gave) ---
+    $roles = $part_array['role_id'] ?? [];
+    if (!is_array($roles)) {
+        $roles = array_filter(explode(CRM_Core_DAO::VALUE_SEPARATOR, (string)$roles));
+    }
+    if (in_array(16, $roles) || in_array('16', $roles)) {
+        wachthond($extdebug, 1, "St.Gave detectie: TRUE via Participant Rol", "[Rol 16]");
+        return true;
+    }
+
+    // --- CRITERIUM 2: REGELING (ja_stgave) ---
+    $regeling = $part_array['part_kampgeld_regeling'] ?? NULL;
+    if (empty($regeling)) {
+        // Veiligheidscheck via APIv4 als hij nog niet in de base_pid2part cache zat
+        $api_part = civicrm_api4('Participant', 'get', [
+            'checkPermissions'  => FALSE,
+            'select'            => ['PART_KAMPGELD.regeling'],
+            'where'             => [['id', '=', $part_id]],
+        ])->first();
+        $regeling = $api_part['PART_KAMPGELD.regeling'] ?? NULL;
+    }
+    if ($regeling === 'ja_stgave') {
+        wachthond($extdebug, 1, "St.Gave detectie: TRUE via handmatige regeling", "[ja_stgave]");
+        return true;
+    }
+
+    // --- CRITERIUM 3: LINE ITEMS ---
+    $gave_values = [301, 302, 443, 472, 473, 497, 498, 523];
+    $line_items = civicrm_api4('LineItem', 'get', [
         'checkPermissions'  => FALSE,
-        'debug'             => $apidebug,
-        'select'            => ['row_count', 'id'],
+        'select'            => ['price_field_value_id'],
         'where'             => [
-            ['entity_id',  '=', $contact_id],
-            ['tag_id',     '=', 141],           // Tag 141 = ST.GAVE
-            ['entity_table','=','civicrm_contact'],
+            ['entity_table',         '=', 'civicrm_participant'],
+            ['entity_id',            '=', $part_id],
+            ['price_field_value_id', 'IN', $gave_values]
         ],
-    ];
-    wachthond($extdebug, 7, 'params_tag (stgave detect)',    $params_tag);
-    $result_tag = civicrm_api4('EntityTag', 'get',           $params_tag);
-    wachthond($extdebug, 9, 'result_tag (stgave detect)',    $result_tag);
-
-    if ($result_tag->countMatched() > 0) {
-        wachthond($extdebug, 1, "ST.GAVE detectie: via tag ST.GAVE (ID 141)",       "[CID: $contact_id]");
-        return TRUE;
+        'limit'             => 1
+    ]);
+    if ($line_items->count() > 0) {
+        wachthond($extdebug, 1, "St.Gave detectie: TRUE via Line Items", "[Kassabon]");
+        return true;
     }
 
-    return FALSE;
+    wachthond($extdebug, 3, "St.Gave detectie: FALSE. Geen match op actieve criteria.", "[PID: $part_id]");
+    return false;
 }
 
 /**
  * =======================================================================================
  * COLOFON: stgave_sync_regeling
  * =======================================================================================
- * @description     Zet het veld CONT_KAMPGELD.regeling (custom field 1514) op 'ja_stgave'
- *                  in de contribution van de deelnemer.
+ * @description     Zet voor een ST.GAVE deelnemer:
+ *                  1. PART_KAMPGELD.regeling = 'ja_stgave' op de participant.
+ *                  2. PART_KAMPGELD.toeristenbelasting = 3 ('Nee, via St.Gave') op de participant.
+ *                  3. source = 'Aanmelden St.Gave' op de contribution (als dat nog niet klopt).
+ *
+ *                  CONT_KAMPGELD.regeling wordt NIET door stgave gezet — pecunia doet dat
+ *                  automatisch nadat pecunia_status_stgave() de stgave line items herkent
+ *                  bij de Participant.update die hier getriggerd wordt.
  *
  * @param array     $part_array     De volledige array vanuit base_pid2part().
- * @return array                    Statusarray.
+ * @return array                    Statusarray per onderdeel.
  * =======================================================================================
  */
 function stgave_sync_regeling(array $part_array): array {
@@ -210,64 +266,124 @@ function stgave_sync_regeling(array $part_array): array {
     $apidebug = FALSE;
     $extwrite = 1;
 
-    $part_id = $part_array['id'] ?? NULL;
+    $part_id  = $part_array['id'] ?? NULL;
     if (empty($part_id)) {
         return ['actie' => 'skip', 'reden' => 'geen part_id'];
     }
 
-    // Haal contribution ID op
+    $contact_id = $contact_id ?? $part_array['contact_id'] ?? NULL;
+
+    $resultaat = ['participant' => 'skip', 'contribution_source' => 'skip'];
+
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 9.1 SYNC REGELING + TOERISTBEL: PARTICIPANT", "[PID: $part_id]");
+    wachthond($extdebug, 2, "########################################################################");
+/*
+    // Haal huidige waarden op
+    $params_part_get = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'select'            => ['PART_KAMPGELD.regeling', 'PART_KAMPGELD.toeristenbelasting'],
+        'where'             => [['id', '=', $part_id]],
+    ];
+    wachthond($extdebug, 7, 'params_part_get',                  $params_part_get);
+    $result_part_get = civicrm_api4('Participant', 'get',       $params_part_get);
+    wachthond($extdebug, 9, 'result_part_get',                  $result_part_get);
+
+    $huidig_regeling   = $result_part_get->first()['PART_KAMPGELD.regeling']       ?? NULL;
+    $huidig_toeristbel = $result_part_get->first()['PART_KAMPGELD.toeristenbelasting']  ?? NULL;
+    wachthond($extdebug, 3, 'huidig_regeling',                  $huidig_regeling);
+    wachthond($extdebug, 3, 'huidig_toeristbel',                $huidig_toeristbel);
+
+    $part_values = [];
+    if ($huidig_regeling !== 'ja_stgave') {
+        $part_values['PART_KAMPGELD.regeling'] = 'ja_stgave';
+    }
+    // Toeristenbelasting: 3 = 'Nee, via St.Gave'
+    if ((int)$huidig_toeristbel !== 3) {
+        $part_values['PART_KAMPGELD.toeristenbelasting'] = 3;
+    }
+
+    if (!empty($part_values)) {
+        wachthond($extdebug, 3, 'part_values (te updaten)',     $part_values);
+        $params_part_update = [
+            'checkPermissions'  => FALSE,
+            'debug'             => $apidebug,
+            'where'             => [['id', '=', $part_id]],
+            'values'            => $part_values,
+        ];
+        wachthond($extdebug, 7, 'params_part_update',           $params_part_update);
+        if ($extwrite == 1) {
+            $result_part_update = civicrm_api4('Participant', 'update', $params_part_update);
+            wachthond($extdebug, 9, 'result_part_update',       $result_part_update);
+        }
+        wachthond($extdebug, 1, "Participant regeling/toeristbel bijgewerkt",    "[PID: $part_id]");
+        $resultaat['participant'] = 'update';
+    } else {
+        wachthond($extdebug, 1, "Participant regeling/toeristbel al correct",    "[PID: $part_id]");
+        $resultaat['participant'] = 'ok';
+    }
+*/
+    wachthond($extdebug, 2, "########################################################################");
+    wachthond($extdebug, 1, "### STGAVE 9.2 SYNC SOURCE: CONTRIBUTION",           "[PID: $part_id]");
+    wachthond($extdebug, 2, "########################################################################");
+
+    // Haal contrib_id op — pecunia eerst, daarna eigen fallback
     $contrib_id = NULL;
     if (function_exists('pecunia_get_contribid')) {
         $contrib_id = pecunia_get_contribid($part_array);
-    } else {
+    }
+    if (empty($contrib_id) && function_exists('stgave_get_contribid_fallback')) {
         $contrib_id = stgave_get_contribid_fallback($part_id);
     }
 
     if (empty($contrib_id)) {
-        wachthond($extdebug, 1, "SKIP regeling: geen contrib_id",                   "[PID: $part_id]");
-        return ['actie' => 'skip', 'reden' => 'geen contrib_id'];
+        wachthond($extdebug, 1, "SKIP contribution source: geen contrib_id",     "[PID: $part_id]");
+        return $resultaat;
     }
 
-    // Controleer huidige waarde van CONT_KAMPGELD.regeling
-    $params_regeling_get = [
+    // Ophalen huidige bron
+    $params_cont_get = [
         'checkPermissions'  => FALSE,
         'debug'             => $apidebug,
-        'select'            => ['CONT_KAMPGELD.regeling'],
+        'select'            => ['source'],
         'where'             => [['id', '=', $contrib_id]],
     ];
-    wachthond($extdebug, 7, 'params_regeling_get',           $params_regeling_get);
-    $result_regeling_get = civicrm_api4('Contribution', 'get', $params_regeling_get);
-    wachthond($extdebug, 9, 'result_regeling_get',           $result_regeling_get);
+    wachthond($extdebug, 7, 'params_cont_get',                   $params_cont_get);
+    $result_cont_get = civicrm_api4('Contribution', 'get',        $params_cont_get);
+    wachthond($extdebug, 9, 'result_cont_get',                   $result_cont_get);
 
-    $huidige_regeling = $result_regeling_get->first()['CONT_KAMPGELD.regeling'] ?? NULL;
-    wachthond($extdebug, 3, 'huidige_regeling',              $huidige_regeling);
+    $huidig_source = $result_cont_get->first()['source'] ?? NULL;
 
-    if ($huidige_regeling === 'ja_stgave') {
-        wachthond($extdebug, 1, "Regeling al correct: ja_stgave",                   "[BID: $contrib_id]");
-        return ['actie' => 'ok', 'regeling' => 'ja_stgave'];
-    }
-
-    // Update regeling naar 'ja_stgave'
-    if (function_exists('base_api_wrapper')) {
-        $resultaat_update = base_api_wrapper('Contribution', $contrib_id, [
-            'CONT_KAMPGELD.regeling' => 'ja_stgave',
-        ]);
-    } else {
-        $params_regeling_update = [
+    // Update bron indien nodig
+    if ($huidig_source !== 'Aanmelden St.Gave') {
+        $params_cont_update = [
             'checkPermissions'  => FALSE,
-            'debug'             => $apidebug,
             'where'             => [['id', '=', $contrib_id]],
-            'values'            => ['CONT_KAMPGELD.regeling' => 'ja_stgave'],
+            'values'            => ['source' => 'Aanmelden St.Gave'],
         ];
-        wachthond($extdebug, 7, 'params_regeling_update',    $params_regeling_update);
+        wachthond($extdebug, 7, 'params_cont_update (source)',   $params_cont_update);
         if ($extwrite == 1) {
-            $resultaat_update = civicrm_api4('Contribution', 'update', $params_regeling_update);
+            civicrm_api4('Contribution', 'update', $params_cont_update);
         }
-        wachthond($extdebug, 9, 'result_regeling_update',    $resultaat_update ?? 'SKIPPED');
+        wachthond($extdebug, 1, "Contribution source bijgewerkt naar 'Aanmelden St.Gave'", "[BID: $contrib_id]");
+        $resultaat['contribution_source'] = 'update';
+    } else {
+        $resultaat['contribution_source'] = 'ok';
+        wachthond($extdebug, 3, "Contribution source al correct",                "[BID: $contrib_id]");
     }
 
-    wachthond($extdebug, 1, "Regeling gezet op 'ja_stgave'",                        "[BID: $contrib_id]");
-    return ['actie' => 'update', 'regeling' => 'ja_stgave'];
+    if (function_exists('stgave_sync_lineitems')) {
+        
+        wachthond($extdebug, 2, "########################################################################");
+        wachthond($extdebug, 1, "### STGAVE 9.3 START FINANCIËLE REPARATIE-CHECK",    "[BID: $contrib_id]");
+        wachthond($extdebug, 2, "########################################################################");
+
+        // De sync-functie controleert nu zelf op saldo-onbalans en gereset betalingen[cite: 3]
+        $resultaat['lineitems'] = stgave_sync_lineitems($contact_id, $part_array);
+    }
+
+    return $resultaat;
 }
 
 /**
@@ -287,7 +403,6 @@ function stgave_sync_participant_rol(array $part_array): array {
 
     $extdebug = 'stgave.configure';
     $apidebug = FALSE;
-    $extwrite = 1;
 
     $part_id = $part_array['id'] ?? NULL;
     if (empty($part_id)) {
@@ -337,14 +452,13 @@ function stgave_sync_participant_rol(array $part_array): array {
 
     $params_part_update = [
         'checkPermissions'  => FALSE,
+        'reload'            => FALSE,
         'debug'             => $apidebug,
         'where'             => [['id', '=', $part_id]],
         'values'            => ['role_id' => $nieuwe_rollen],
     ];
     wachthond($extdebug, 7, 'params_part_update',            $params_part_update);
-    if ($extwrite == 1) {
-        $result_part_update = civicrm_api4('Participant', 'update', $params_part_update);
-    }
+    $result_part_update = civicrm_api4('Participant', 'update', $params_part_update);
     wachthond($extdebug, 9, 'result_part_update',            $result_part_update ?? 'SKIPPED');
     wachthond($extdebug, 1, "Participant rollen gezet op 7 + 16",                    "[PID: $part_id]");
 
