@@ -68,9 +68,9 @@ function stgave_civicrm_enable(): void {
  * =======================================================================================
  * COLOFON: stgave_civicrm_post
  * =======================================================================================
- * @description     Triggert de St.Gave motor bij het aanmaken of wijzigen van een
- *                  Participant record. Haalt de volledige part_array op via base_pid2part()
- *                  en roept stgave_civicrm_configure() aan.
+ * @description     Triggert de St.Gave motor bij het aanmaken of wijzigen van:
+ *                  - Participant: roept stgave_civicrm_configure() aan
+ *                  - Relationship type 20/21: zet permissions naar 2 (Bekijken + wijzigen)
  * =======================================================================================
  */
 function stgave_civicrm_post(string $op, string $objectName, int $objectId, &$objectRef): void {
@@ -78,6 +78,33 @@ function stgave_civicrm_post(string $op, string $objectName, int $objectId, &$ob
     static $processing_stgave_post = FALSE;
     if ($processing_stgave_post) { return; }
 
+    // SECTION 1: Relationship post-hook (type 20 = StGave Deelnemer via; type 21 = StGave Ouder via)
+    if ($objectName === 'Relationship' && in_array($op, ['create', 'edit'])) {
+        $rel_type_id = $objectRef['relationship_type_id'] ?? NULL;
+        if (in_array($rel_type_id, [20, 21])) {
+            $extdebug = 'stgave.post.rel';
+            wachthond($extdebug, 2, "########################################################################");
+            wachthond($extdebug, 1, "### STGAVE POST HOOK RELATIONSHIP",         "[OP: $op | RID: $objectId | TYPE: $rel_type_id]");
+            wachthond($extdebug, 2, "########################################################################");
+
+            $is_perm_b_a = (int)($objectRef['is_permission_b_a'] ?? 0);
+            if ($is_perm_b_a !== 2) {
+                wachthond($extdebug, 3, "Permission b_a aanpassen: $is_perm_b_a → 2", "[RID: $objectId]");
+                civicrm_api4('Relationship', 'update', [
+                    'checkPermissions' => FALSE,
+                    'where'            => [['id', '=', $objectId]],
+                    'values'           => ['is_permission_b_a' => 2],
+                ]);
+                wachthond($extdebug, 1, "Permission b_a bijgewerkt naar 2 (Bekijken en wijzigen)", "[RID: $objectId]");
+                $objectRef['is_permission_b_a'] = 2;
+            } else {
+                wachthond($extdebug, 3, "Permission b_a al correct (2)", "[RID: $objectId]");
+            }
+        }
+        return;
+    }
+
+    // SECTION 2: Participant post-hook
     if ($objectName !== 'Participant' || !in_array($op, ['create', 'edit'])) {
         return;
     }
