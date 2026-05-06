@@ -61,14 +61,18 @@ function stgave_get_relaties(int $contact_id): array {
     wachthond($extdebug, 1, "### STGAVE 1.1 GAVECONTACT VIA TYPE 20",                 "[CID: $contact_id]");
     wachthond($extdebug, 2, "########################################################################");
 
+    // Zoeken naar type 20 in beide richtingen: deelnemer -> gave-contactpersoon OF gave-contactpersoon -> deelnemer
+    // Dit vangt beide situaties: 1) deelnemer is contact_a (normale richting) en 2) deelnemer is contact_b (omgekeerde)
     $params_rel_type20 = [
         'checkPermissions'  => FALSE,
         'debug'             => $apidebug,
         'select'            => ['id', 'contact_id_a', 'contact_id_b', 'is_permission_b_a'],
         'where'             => [
-            ['contact_id_a',          '=',  $contact_id],
-            ['relationship_type_id',  '=',  20],    // StGave Deelnemer via
-            ['is_active',             '=',  TRUE],
+            ['OR', [
+                ['AND', [['contact_id_a', '=', $contact_id], ['relationship_type_id', '=', 20]]],
+                ['AND', [['contact_id_b', '=', $contact_id], ['relationship_type_id', '=', 20]]],
+            ]],
+            ['is_active', '=', TRUE],
         ],
     ];
     wachthond($extdebug, 7, 'params_rel_type20',          $params_rel_type20);
@@ -79,13 +83,15 @@ function stgave_get_relaties(int $contact_id): array {
 
     if ($count20 >= 1) {
         $rec20 = $result_rel_type20->first();
-        $relaties['gavecontact_id']    = $rec20['contact_id_b'];
+        // Bepaal welk contact de gave-contactpersoon is (de ANDERE contact in de relatie)
+        $is_contact_a = ($rec20['contact_id_a'] == $contact_id);
+        $relaties['gavecontact_id']    = $is_contact_a ? $rec20['contact_id_b'] : $rec20['contact_id_a'];
         $relaties['gavecontact_relid'] = $rec20['id'];
         if ($count20 > 1) {
             wachthond($extdebug, 1, "WAARSCHUWING: $count20 actieve gave-contactpersonen (type 20)", "[CID: $contact_id]");
         }
-        wachthond($extdebug, 1, "Gavecontact gevonden",   "[GC: {$relaties['gavecontact_id']}]");
-        // Zorg dat contactpersoon (b) deelnemer (a) kan inzien + wijzigen
+        wachthond($extdebug, 1, "Gavecontact gevonden",   "[GC: {$relaties['gavecontact_id']} | Direction: " . ($is_contact_a ? 'A→B' : 'B→A') . "]");
+        // Zorg dat contactpersoon deelnemer kan inzien + wijzigen (is_permission_b_a = 2)
         _stgave_ensure_rel_permission($rec20['id'], (int)($rec20['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
     } else {
         wachthond($extdebug, 1, "Geen gavecontact gevonden (type 20)",                "[CID: $contact_id]");
