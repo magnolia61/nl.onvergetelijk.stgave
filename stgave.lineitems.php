@@ -213,21 +213,29 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
     wachthond($extdebug, 9, 'result_payment_get',               $result_payment_get);
 
     foreach ($result_payment_get as $payment) {
-        if ((float)$payment['total_amount'] !== 0.0) {
+        // APIv4 Result iteration geeft objects, niet arrays → gebruik object property access
+        $pay_id = $payment->id ?? NULL;
+        $pay_amt = $payment->total_amount ?? NULL;
 
-            wachthond($extdebug, 7, "Aanpassen payment #{$payment['id']} naar €0 via APIv3", "[BID: $contrib_id]");
+        if (empty($pay_id)) {
+            wachthond($extdebug, 1, "SKIP payment: geen id", "[BID: $contrib_id]");
+            continue;
+        }
+
+        if ((float)$pay_amt !== 0.0) {
+            wachthond($extdebug, 7, "Aanpassen payment #{$pay_id} naar €0 via APIv3", "[BID: $contrib_id]");
 
             if ($extwrite == 1) {
                 // APIv4 ondersteunt geen 'update' op Payment, dus gebruik APIv3
                 // Cast naar int omdat APIv4 strings teruggeeft maar APIv3 integers verwacht
                 $result_pay_v3 = civicrm_api3('Payment', 'create', [
-                    'id'           => (int)$payment['id'],
+                    'id'           => (int)$pay_id,
                     'total_amount' => 0,
                 ]);
                 wachthond($extdebug, 9, 'result_payment_update_v3', $result_pay_v3);
             }
 
-            wachthond($extdebug, 1, "Payment #{$payment['id']} gereset naar €0", "[BID: $contrib_id]");
+            wachthond($extdebug, 1, "Payment #{$pay_id} gereset naar €0", "[BID: $contrib_id]");
         }
     }
 
