@@ -139,7 +139,7 @@ function stgave_get_relaties(int $contact_id): array {
         $params_rel_type21 = [
             'checkPermissions'  => FALSE,
             'debug'             => $apidebug,
-            'select'            => ['id', 'contact_id_a'],
+            'select'            => ['id', 'contact_id_a', 'is_permission_b_a'],
             'where'             => [
                 ['contact_id_b',          '=',  $relaties['gavecontact_id']],
                 ['relationship_type_id',  '=',  21],    // StGave Ouder via
@@ -154,9 +154,12 @@ function stgave_get_relaties(int $contact_id): array {
         wachthond($extdebug, 3, 'count type21 ouders', $count21);
 
         if ($count21 === 1) {
-            $relaties['ouder_id']   = $result_rel_type21->first()['contact_id_a'];
+            $rec21 = $result_rel_type21->first();
+            $relaties['ouder_id']   = $rec21['contact_id_a'];
             $relaties['ouder_bron'] = 'stgave_ouder_via';
             wachthond($extdebug, 1, "Ouder gevonden via StGave Ouder via", "[OUD: {$relaties['ouder_id']}]");
+            // Zorg dat ouder de gave-contactpersoon kan inzien + wijzigen (is_permission_b_a = 2)
+            _stgave_ensure_rel_permission($rec21['id'], (int)($rec21['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
         } elseif ($count21 === 0) {
             wachthond($extdebug, 1, "SKIP: Geen ouder via type 21",        "[GC: {$relaties['gavecontact_id']}]");
         } else {
