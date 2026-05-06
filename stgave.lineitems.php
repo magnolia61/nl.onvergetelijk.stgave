@@ -79,7 +79,18 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
         'where'            => [['id', '=', $contrib_id]],
     ])->first();
 
-    // 2. Haal de huidige line-items op
+    // 2. Haal ALLE line-items op voor deze contribution
+    $params_all_lineitems = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'select'            => ['id', 'unit_price', 'entity_table', 'entity_id'],
+        'where'             => [['contribution_id', '=', $contrib_id]],
+    ];
+    wachthond($extdebug, 7, 'params_all_lineitems',              $params_all_lineitems);
+    $result_all_lineitems = civicrm_api4('LineItem', 'get',      $params_all_lineitems);
+    wachthond($extdebug, 9, 'result_all_lineitems',              $result_all_lineitems);
+
+    // 3. Filter op participant-specifieke items
     $params_lineitem_get = [
         'checkPermissions'  => FALSE,
         'debug'             => $apidebug,
@@ -94,9 +105,20 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
     $result_lineitem_get = civicrm_api4('LineItem', 'get',       $params_lineitem_get);
     wachthond($extdebug, 9, 'result_lineitem_get',               $result_lineitem_get);
 
-    $huidig_aantal = $result_lineitem_get->count();
-    $li_totaal     = array_sum($result_lineitem_get->column('unit_price'));
-    $betaald_bedrag = (float)($cont_status['total_amount'] ?? 0) + (float)($cont_status['actual_total_amount'] ?? 0); // Afhankelijk van Civi-versie/config
+    $huidig_aantal      = $result_lineitem_get->count();
+    $li_totaal          = array_sum($result_lineitem_get->column('unit_price'));
+    $all_items_totaal   = array_sum($result_all_lineitems->column('unit_price'));  // ALLE items
+    $has_non_participant_items = FALSE;
+
+    // Controleer of er non-participant items zijn
+    foreach ($result_all_lineitems as $item) {
+        $is_participant_item = ($item['entity_table'] === 'civicrm_participant' && $item['entity_id'] == $part_id);
+        if (!$is_participant_item) {
+            $has_non_participant_items = TRUE;
+            wachthond($extdebug, 3, 'Vreemde item in contribution gevonden',
+                     "entity_table={$item['entity_table']}, entity_id={$item['entity_id']}, price={$item['unit_price']}");
+        }
+    }
 
     // Haal de som van de werkelijke betalingen op (Payment records)
     $payment_sum = civicrm_api4('Payment', 'get', [
@@ -105,8 +127,16 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
         'where' => [['contribution_id', '=', $contrib_id]],
     ])->first()['totaal'] ?? 0;
 
-    // REPARATIE NU OOK NODIG ALS payment_sum != 0
-    $reparatie_nodig = ($huidig_aantal !== 3 || (float)$li_totaal !== 0.0 || (float)$payment_sum !== 0.0);
+    // REPARATIE NODIG als:
+    // 1. Niet exact 3 participant-items, OF
+    // 2. Participant items totaal != €0, OF
+    // 3. Payment sum != €0, OF
+    // 4. Er zijn non-participant items in de contribution
+    $reparatie_nodig = ($huidig_aantal !== 3 || (float)$li_totaal !== 0.0 || (float)$payment_sum !== 0.0 || $has_non_participant_items);
+
+    if ($reparatie_nodig && $has_non_participant_items) {
+        wachthond($extdebug, 1, "WAARSCHUWING: Contribution bevat non-participant items (totaal €" . number_format($all_items_totaal, 2) . ")", "[BID: $contrib_id]");
+    }
 
     if (!$reparatie_nodig) {
         wachthond($extdebug, 1, "OK: Factuur volledig in balans (€0.00 / 3 items / €0 betaald).", "[SKIP REPAIR]");
@@ -117,20 +147,21 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
     wachthond($extdebug, 1, "### STGAVE LINEITEMS 4.2 CLEAN SWEEP (REPARATIE)",       "[BID: $contrib_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    // Verwijder ALLES wat aan deze deelnemer gekoppeld is op de factuur[cite: 4]
-    if ($huidig_aantal > 0) {
-        $delete_ids = $result_lineitem_get->column('id');
+    // Verwijder ALLE line items uit de contribution om ze opnieuw op te bouwen
+    // Dit omvat zowel participant-specifieke items als evt. leftover items van eerdere wijzigingen
+    $all_delete_ids = $result_all_lineitems->column('id');
+    if (count($all_delete_ids) > 0) {
         $params_lineitem_delete = [
             'checkPermissions' => FALSE,
-            'where'            => [['id', 'IN', $delete_ids]],
+            'where'            => [['id', 'IN', $all_delete_ids]],
         ];
-        
-        wachthond($extdebug, 7, 'params_lineitem_delete',            $params_lineitem_delete);
+
+        wachthond($extdebug, 7, 'params_lineitem_delete (ALLE items)',   $params_lineitem_delete);
         if ($extwrite == 1) {
             $result_lineitem_delete = civicrm_api4('LineItem', 'delete', $params_lineitem_delete);
-            wachthond($extdebug, 9, 'result_lineitem_delete',        $result_lineitem_delete);
+            wachthond($extdebug, 9, 'result_lineitem_delete',            $result_lineitem_delete);
         }
-        wachthond($extdebug, 1, count($delete_ids) . " line-items verwijderd om saldo te resetten", "[BID: $contrib_id]");
+        wachthond($extdebug, 1, count($all_delete_ids) . " line-items verwijderd (incl. orphans)", "[BID: $contrib_id]");
     }
 
     wachthond($extdebug, 2, "########################################################################");
