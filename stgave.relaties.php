@@ -107,7 +107,7 @@ function stgave_get_relaties(int $contact_id): array {
     $params_rel_childof = [
         'checkPermissions'  => FALSE,
         'debug'             => $apidebug,
-        'select'            => ['id', 'contact_id_b'],
+        'select'            => ['id', 'contact_id_b', 'is_permission_b_a'],
         'where'             => [
             ['contact_id_a',          '=',  $contact_id],
             ['relationship_type_id',  '=',  1],     // Child of
@@ -121,9 +121,12 @@ function stgave_get_relaties(int $contact_id): array {
     wachthond($extdebug, 9, 'result_rel_childof',         $result_rel_childof);
 
     if ($result_rel_childof->count() === 1) {
-        $relaties['ouder_id']   = $result_rel_childof->first()['contact_id_b'];
+        $rec_childof = $result_rel_childof->first();
+        $relaties['ouder_id']   = $rec_childof['contact_id_b'];
         $relaties['ouder_bron'] = 'child_of';
         wachthond($extdebug, 1, "Ouder gevonden via Child of",  "[OUD: {$relaties['ouder_id']}]");
+        // Zorg dat ouder het kind kan inzien + wijzigen (is_permission_b_a = 2)
+        _stgave_ensure_rel_permission($rec_childof['id'], (int)($rec_childof['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
     }
 
     // -----------------------------------------------------------------------
