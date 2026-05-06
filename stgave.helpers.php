@@ -278,7 +278,7 @@ function stgave_sync_regeling(array $part_array): array {
     wachthond($extdebug, 2, "########################################################################");
     wachthond($extdebug, 1, "### STGAVE 9.1 SYNC REGELING + TOERISTBEL: PARTICIPANT", "[PID: $part_id]");
     wachthond($extdebug, 2, "########################################################################");
-/*
+
     // Haal huidige waarden op
     $params_part_get = [
         'checkPermissions'  => FALSE,
@@ -323,7 +323,6 @@ function stgave_sync_regeling(array $part_array): array {
         wachthond($extdebug, 1, "Participant regeling/toeristbel al correct",    "[PID: $part_id]");
         $resultaat['participant'] = 'ok';
     }
-*/
     wachthond($extdebug, 2, "########################################################################");
     wachthond($extdebug, 1, "### STGAVE 9.2 SYNC SOURCE: CONTRIBUTION",           "[PID: $part_id]");
     wachthond($extdebug, 2, "########################################################################");
