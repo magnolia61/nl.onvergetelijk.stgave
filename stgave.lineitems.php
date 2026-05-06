@@ -199,10 +199,12 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
     }
 
     wachthond($extdebug, 2, "########################################################################");
-    wachthond($extdebug, 1, "### STGAVE LINEITEMS 4.4 SYNC PAYMENTS NAAR €0",         "[BID: $contrib_id]");
+    wachthond($extdebug, 1, "### STGAVE LINEITEMS 4.4 VERWIJDER ORPHANED PAYMENTS",   "[BID: $contrib_id]");
     wachthond($extdebug, 2, "########################################################################");
 
-    // Los de onbalans in 'Totaal betaald' op door alle bestaande betalingen naar nul te zetten[cite: 3, 4]
+    // Verwijder alle betalingen die niet €0 zijn. Aangezien de line items €0 totaliseren,
+    // mogen er geen payments zijn die aan deze contribution zijn gekoppeld.
+    // Payment.create/update werkt niet goed (maakt altijd nieuw aan), dus we deleten ze.
     $params_payment_get = [
         'checkPermissions' => FALSE,
         'select' => ['id', 'total_amount'],
@@ -223,19 +225,17 @@ function stgave_sync_lineitems(int $contact_id, array $part_array): array {
         }
 
         if ((float)$pay_amt !== 0.0) {
-            wachthond($extdebug, 7, "Aanpassen payment #{$pay_id} naar €0 via APIv3", "[BID: $contrib_id]");
+            wachthond($extdebug, 7, "Verwijderen orphaned payment #{$pay_id} (bedrag: €" . number_format($pay_amt, 2) . ")", "[BID: $contrib_id]");
 
             if ($extwrite == 1) {
-                // APIv4 ondersteunt geen 'update' op Payment, dus gebruik APIv3
-                // Cast naar int omdat APIv4 strings teruggeeft maar APIv3 integers verwacht
-                $result_pay_v3 = civicrm_api3('Payment', 'create', [
-                    'id'           => (int)$pay_id,
-                    'total_amount' => 0,
+                $result_pay_delete = civicrm_api4('Payment', 'delete', [
+                    'checkPermissions' => FALSE,
+                    'where' => [['id', '=', $pay_id]],
                 ]);
-                wachthond($extdebug, 9, 'result_payment_update_v3', $result_pay_v3);
+                wachthond($extdebug, 9, 'result_payment_delete', $result_pay_delete);
             }
 
-            wachthond($extdebug, 1, "Payment #{$pay_id} gereset naar €0", "[BID: $contrib_id]");
+            wachthond($extdebug, 1, "Payment #{$pay_id} verwijderd", "[BID: $contrib_id]");
         }
     }
 
