@@ -91,8 +91,14 @@ function stgave_get_relaties(int $contact_id): array {
             wachthond($extdebug, 1, "WAARSCHUWING: $count20 actieve gave-contactpersonen (type 20)", "[CID: $contact_id]");
         }
         wachthond($extdebug, 1, "Gavecontact gevonden",   "[GC: {$relaties['gavecontact_id']} | Direction: " . ($is_contact_a ? 'A→B' : 'B→A') . "]");
-        // Zorg dat contactpersoon deelnemer kan inzien + wijzigen (is_permission_b_a = 2)
-        _stgave_ensure_rel_permission($rec20['id'], (int)($rec20['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
+        // Zorg dat contactpersoon deelnemer kan inzien + wijzigen
+        // Als deelnemer=contact_a, contactpersoon=contact_b: zet is_permission_a_b (wat contact_b kan met contact_a)
+        // Als deelnemer=contact_b, contactpersoon=contact_a: zet is_permission_b_a (wat contact_a kan met contact_b)
+        if ($is_contact_a) {
+            _stgave_ensure_rel_permission_ab($rec20['id'], (int)($rec20['is_permission_a_b'] ?? 0), 2, $extdebug, $apidebug, 1);
+        } else {
+            _stgave_ensure_rel_permission($rec20['id'], (int)($rec20['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
+        }
     } else {
         wachthond($extdebug, 1, "Geen gavecontact gevonden (type 20)",                "[CID: $contact_id]");
     }
@@ -125,8 +131,10 @@ function stgave_get_relaties(int $contact_id): array {
         $relaties['ouder_id']   = $rec_childof['contact_id_b'];
         $relaties['ouder_bron'] = 'child_of';
         wachthond($extdebug, 1, "Ouder gevonden via Child of",  "[OUD: {$relaties['ouder_id']}]");
-        // Zorg dat ouder het kind kan inzien + wijzigen (is_permission_b_a = 2)
-        _stgave_ensure_rel_permission($rec_childof['id'], (int)($rec_childof['is_permission_b_a'] ?? 0), 2, $extdebug, $apidebug, 1);
+        // Zorg dat ouder het kind kan inzien + wijzigen
+        // contact_a = kind (participant), contact_b = ouder
+        // is_permission_a_b = wat contact_b (ouder) kan met contact_a (kind)
+        _stgave_ensure_rel_permission_ab($rec_childof['id'], (int)($rec_childof['is_permission_a_b'] ?? 0), 2, $extdebug, $apidebug, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -404,4 +412,23 @@ function _stgave_ensure_rel_permission(int $rel_id, int $huidig, int $gewenst, s
         civicrm_api4('Relationship', 'update', $params_perm_update);
     }
     wachthond($extdebug, 1, "Permission b_a bijgewerkt naar $gewenst",   "[REL: $rel_id]");
+}
+
+function _stgave_ensure_rel_permission_ab(int $rel_id, int $huidig, int $gewenst, string $extdebug, bool $apidebug, int $extwrite): void {
+    if ($huidig === $gewenst) {
+        wachthond($extdebug, 3, "Permission a_b al correct ($gewenst)",   "[REL: $rel_id]");
+        return;
+    }
+    wachthond($extdebug, 3, "Permission a_b bijwerken: $huidig → $gewenst", "[REL: $rel_id]");
+    $params_perm_update = [
+        'checkPermissions'  => FALSE,
+        'debug'             => $apidebug,
+        'where'             => [['id', '=', $rel_id]],
+        'values'            => ['is_permission_a_b' => $gewenst],
+    ];
+    wachthond($extdebug, 7, 'params_perm_update',     $params_perm_update);
+    if ($extwrite == 1) {
+        civicrm_api4('Relationship', 'update', $params_perm_update);
+    }
+    wachthond($extdebug, 1, "Permission a_b bijgewerkt naar $gewenst",   "[REL: $rel_id]");
 }
