@@ -31,6 +31,21 @@
 function stgave_civicrm_configure(int $contact_id, array $part_array = []): array {
 
     static $processing_stgave = [];
+    static $niet_gave_parts  = [];   // Per-request cache van participants die al als 'niet-St.Gave' zijn vastgesteld
+
+    // Als deze specifieke participant deze request al als niet-St.Gave is vastgesteld,
+    // sla de volledige detectie (incl. API-calls in stgave_is_gave_contact) over.
+    // VEILIG: stgave maakt een niet-gave participant nooit binnen dezelfde request alsnog
+    // gave — rol 16 wordt uitsluitend toegevoegd aan reeds-gave deelnemers (stap 7.0).
+    // Gecachet op part_id en NIET op contact_id: een ander participant van hetzelfde
+    // contact (bijv. een historische St.Gave-inschrijving) wordt opnieuw gedetecteerd,
+    // zodat de "alle jaren"-herstellogica uit core 4.9b intact blijft.
+    $part_id_cache = $part_array['id'] ?? NULL;
+    if ($part_id_cache && isset($niet_gave_parts[$part_id_cache])) {
+        wachthond('stgave.configure', 3, "SKIP (cached): part al als niet-St.Gave vastgesteld deze request", "[CID: $contact_id / PID: $part_id_cache]");
+        return ['status' => 'skip', 'reden' => 'geen ST.GAVE contact (cached)'];
+    }
+
     if (isset($processing_stgave[$contact_id])) {
         return ['status' => 'skip', 'reden' => 'al in verwerking'];
     }
@@ -56,6 +71,11 @@ function stgave_civicrm_configure(int $contact_id, array $part_array = []): arra
 
     if (!$is_gave) {
         wachthond($extdebug, 1, "SKIP: Contact is geen ST.GAVE deelnemer",          "[CID: $contact_id]");
+        // Onthoud per participant dat 'ie niet-gave is, zodat herhaalde aanroepen binnen
+        // deze request (core 4.9 + 4.9b + post-hook + pecunia-resave) de detectie overslaan.
+        if ($part_id_cache) {
+            $niet_gave_parts[$part_id_cache] = TRUE;
+        }
         unset($processing_stgave[$contact_id]);
         return ['status' => 'skip', 'reden' => 'geen ST.GAVE contact'];
     }

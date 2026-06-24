@@ -1,29 +1,26 @@
 <?xml version="1.0"?>
 <extension key="nl.onvergetelijk.stgave" type="module">
   <file>stgave</file>
-  <name>nl.onvergetelijk.stgave</name>
-  <description>FIXME</description>
+  <name>Onvergetelijk - Stgave</name>
+  <description>Beheert de St.Gave-regeling voor deelnemers</description>
   <license>AGPL-3.0</license>
-  <authors>
-    <author>
-      <name>magnolia61</name>
-      <email>richard.van.oosterhout@gmail.com</email>
-      <role>Maintainer</role>
-    </author>
-  </authors>
+  <maintainer>
+    <author>Richard van Oosterhout</author>
+    <email>webteam@onvergetelijk.nl</email>
+  </maintainer>
   <urls>
-    <url desc="Main Extension Page">https://FIXME</url>
-    <url desc="Documentation">https://FIXME</url>
-    <url desc="Support">https://FIXME</url>
+    <url desc="Main Extension Page">https://www.onvergetelijk.nl</url>
+    <url desc="Documentation">https://www.onvergetelijk.nl</url>
+    <url desc="Support">https://www.onvergetelijk.nl</url>
     <url desc="Licensing">https://www.gnu.org/licenses/agpl-3.0.html</url>
   </urls>
   <releaseDate>2026-05-05</releaseDate>
   <version>1.0.0</version>
-  <develStage>alpha</develStage>
+  <develStage>stable</develStage>
   <compatibility>
     <ver>6.13</ver>
   </compatibility>
-  <comments>This is a new, undeveloped module</comments>
+  <comments>Onderdeel van de Onvergetelijk-extensie-suite voor Stichting Onvergetelijke Zomerkampen. Compatibel met CiviCRM 6.13, PHP 8.4 en Smarty 5.</comments>
   <classloader>
     <psr0 prefix="CRM_" path="."/>
     <psr4 prefix="Civi\" path="Civi"/>
